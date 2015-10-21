@@ -16,6 +16,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Map.Entry;
+import java.util.SortedSet;
 
 import net.sf.json.JSONObject;
 
@@ -81,6 +82,7 @@ public class ContentReviewServiceImpl implements ContentReviewService {
 	private static final String PARAM_ASSIGNMENT_INSTRUCTIONS = "assignmentInstructions";
 	private static final String PARAM_ASSIGNMENT_ATTACHMENT_DATA = "assignmentAttachmentData";
 	private static final String PARAM_ASSIGNMENT_ATTACHMENT_EXTERNAL_ID = "assignmentAttachmentExternalId";
+	private static final String PARAM_ASSIGNMENT_EXCLUDE_QUOTES = "assignmentExcludeQuotes";
 	private static final String PARAM_UPDATE_ASSIGNMNET_DETAILS = "updateAssignmentDetails";
 	
 	private static final String ASN1_GRADE_PERM = "asn.grade";
@@ -145,6 +147,13 @@ public class ContentReviewServiceImpl implements ContentReviewService {
 								if(opts.containsKey("instructions")){
 									try {
 										builder.addTextBody(PARAM_ASSIGNMENT_INSTRUCTIONS, URLEncoder.encode(opts.get("instructions").toString(), "UTF-8"));
+									} catch (UnsupportedEncodingException e) {
+										log.error(e.getMessage(), e);
+									}
+								}
+								if(opts.containsKey("exclude_quoted")){
+									try {
+										builder.addTextBody(PARAM_ASSIGNMENT_EXCLUDE_QUOTES, URLEncoder.encode(opts.get("exclude_quoted").toString(), "UTF-8"));
 									} catch (UnsupportedEncodingException e) {
 										log.error(e.getMessage(), e);
 									}
@@ -785,5 +794,17 @@ public class ContentReviewServiceImpl implements ContentReviewService {
 
 	public void setSecurityService(SecurityService securityService) {
 		this.securityService = securityService;
+	}
+
+	public boolean allowAllContent() {
+		return true;
+	}
+
+	public Map<String, SortedSet<String>> getAcceptableExtensionsToMimeTypes() {
+		return new HashMap<String, SortedSet<String>>();
+	}
+
+	public Map<String, SortedSet<String>> getAcceptableFileTypesToExtensions() {
+		return new HashMap<String, SortedSet<String>>();
 	}
 }
