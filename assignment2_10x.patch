@@ -1,0 +1,781 @@
+Index: .
+===================================================================
+--- .	(revision 87902)
++++ .	(working copy)
+
+Property changes on: .
+___________________________________________________________________
+Modified: svn:mergeinfo
+   Merged /assignment2/trunk:r86722,87004
+Index: api/src/java/org/sakaiproject/assignment2/hbm/Assignment2.hbm.xml
+===================================================================
+--- api/src/java/org/sakaiproject/assignment2/hbm/Assignment2.hbm.xml	(revision 87902)
++++ api/src/java/org/sakaiproject/assignment2/hbm/Assignment2.hbm.xml	(working copy)
+@@ -95,6 +95,10 @@
+         <property name="contentReviewEnabled" type="boolean">
+         	<column name="CONTENT_REVIEW_ENABLED" />
+         </property>
++       	<!-- true if content review allows students to view their own reports -->
++        <property name="contentReviewStudentViewReport" type="java.lang.Boolean">
++        	<column name="CONTENT_REVIEW_STU_VIEW_REPORT" />
++        </property>
+         <!-- a reference for the content review service item associated with this
+              assignment -->
+         <property name="contentReviewRef" type="java.lang.String" >
+Index: api/src/java/org/sakaiproject/assignment2/logic/ExternalContentReviewLogic.java
+===================================================================
+--- api/src/java/org/sakaiproject/assignment2/logic/ExternalContentReviewLogic.java	(revision 87902)
++++ api/src/java/org/sakaiproject/assignment2/logic/ExternalContentReviewLogic.java	(working copy)
+@@ -23,6 +23,7 @@
+ 
+ import java.util.Collection;
+ import java.util.List;
++import java.util.Set;
+ 
+ import org.sakaiproject.assignment2.model.Assignment2;
+ import org.sakaiproject.assignment2.model.SubmissionAttachment;
+@@ -62,9 +63,9 @@
+      * calling this method
+      * @param userId if null, assumes current user
+      * @param assign the assignment that this attachment is associated with
+-     * @param attachmentReference the reference for the attachment in content hosting
++     * @param attachments the reference for the attachments in content hosting
+      */
+-    public void reviewAttachment(String userId, Assignment2 assign, String attachmentReference);
++    public void reviewAttachment(String userId, Assignment2 assign, Set<SubmissionAttachment> attachments);
+     
+     /**
+      * 
+@@ -92,17 +93,18 @@
+      * pass instructorView = false and the assignment is set up with the option 
+      * prohibiting students from viewing the reports, the properties will not be populated
+      */
+-    public void populateReviewProperties(Assignment2 assignment, Collection<SubmissionAttachment> attachments, boolean instructorView);
++    public void populateReviewProperties(Assignment2 assignment, Collection<SubmissionAttachment> attachments, boolean instructorView, String userId);
+ 
+     /**
+      * 
+      * @param attachmentReference
+      * @param instructorView true if you want the report for an instructor. false if
+      * you want the report for the student
++     * @param assign
+      * @return the url of the review report for the given attachmentReference. Returns
+      * null if url cannot be retrieved
+      */
+-    public String getReportUrl(String attachmentReference, boolean instructorView);
++    public String getReportUrl(String attachmentReference, Assignment2 assign, boolean instructorView, String userId);
+     
+     /**
+      * 
+@@ -122,4 +124,10 @@
+     public void createAssignment(Assignment2 assing);
+     
+     public void populateAssignmentPropertiesFromAssignment(Assignment2 assign);
++    
++    /**
++     * returns content review service name
++     * @return
++     */
++    public String getServiceName();
+ }
+Index: api/src/java/org/sakaiproject/assignment2/model/Assignment2.java
+===================================================================
+--- api/src/java/org/sakaiproject/assignment2/model/Assignment2.java	(revision 87902)
++++ api/src/java/org/sakaiproject/assignment2/model/Assignment2.java	(working copy)
+@@ -60,6 +60,7 @@
+     private String eventId;
+     private int numSubmissionsAllowed;
+     private boolean contentReviewEnabled;
++    private Boolean contentReviewStudentViewReport;
+     private String contentReviewRef;
+     private boolean modelAnswerEnabled;
+     private String modelAnswerText;
+@@ -873,4 +874,17 @@
+         
+         return points;
+     }
++
++	public Boolean isContentReviewStudentViewReport() {
++		if(contentReviewStudentViewReport == null){
++			return false;
++		}else{
++			return contentReviewStudentViewReport;
++		}
++	}
++
++	public void setContentReviewStudentViewReport(
++			Boolean contentReviewStudentViewReport) {
++		this.contentReviewStudentViewReport = contentReviewStudentViewReport;
++	}
+ }
+Index: api/src/java/org/sakaiproject/assignment2/model/constants/AssignmentConstants.java
+===================================================================
+--- api/src/java/org/sakaiproject/assignment2/model/constants/AssignmentConstants.java	(revision 87902)
++++ api/src/java/org/sakaiproject/assignment2/model/constants/AssignmentConstants.java	(working copy)
+@@ -242,12 +242,18 @@
+    
+     public static final String PROP_REVIEW_INFO = "content_review_info";
+     
++    /**
++     * The ContentReviewService name for the Turnitin service
++     */
++    public static final String CONTENT_REVIEW_NAME_TII = "TurnItIn";
++    
+     /* These properties are specific to content review implementation using Turnitin */
+     
+     /**
+      * Set this property to true if you want to turn on the Turnitin option for assignment2
+      */
+     public static final String TII_ENABLED = "turnitin.enable.assignment2";
++    public static final String CONTENT_REVIEW_ENABLED = "assignment2.useContentReview";
+     
+     /**
+      * This property is specific to Turnitin implementation of ContentReview.
+Index: api/src/java/org/sakaiproject/assignment2/service/model/AssignmentDefinition.java
+===================================================================
+--- api/src/java/org/sakaiproject/assignment2/service/model/AssignmentDefinition.java	(revision 87902)
++++ api/src/java/org/sakaiproject/assignment2/service/model/AssignmentDefinition.java	(working copy)
+@@ -52,6 +52,7 @@
+     private int submissionType;
+     private boolean requiresSubmission;
+     private boolean contentReviewEnabled;
++    private boolean contentReviewStudentViewReport;
+ 
+     private List<String> groupRestrictionGroupTitles;
+     private List<String> attachmentReferences;
+@@ -309,4 +310,13 @@
+         this.properties = properties;
+     }
+ 
++	public boolean isContentReviewStudentViewReport() {
++		return contentReviewStudentViewReport;
++	}
++
++	public void setContentReviewStudentViewReport(
++			boolean contentReviewStudentViewReport) {
++		this.contentReviewStudentViewReport = contentReviewStudentViewReport;
++	}
++
+ }
+
+Property changes on: api/src/java/org/sakaiproject/assignment2/service/model/AssignmentDefinition.java
+___________________________________________________________________
+Modified: svn:mergeinfo
+   Merged /assignment2/trunk/api/src/java/org/sakaiproject/assignment2/service/model/AssignmentDefinition.java:r86722
+Index: bundle/messages.properties
+===================================================================
+--- bundle/messages.properties	(revision 87902)
++++ bundle/messages.properties	(working copy)
+@@ -895,8 +895,8 @@
+ - To upload your changes to the Assignments tool, use a ZIP utility to compress and save the {0} folder in .zip format.  Then go to the Grade page for this assignment, click the Upload Feedback link, browse to the file you just created, and select it.  Then follow the on-screen instructions.
+ 
+ assignment2.turnitin.asnnedit.title = Turnitin
+-assignment2.turnitin.asnnedit.use_turnitin = Use Turnitin
+-assignment2.turnitin.asnnedit.attachment.warning = Turnitin supports attachments only. Reports will not be generated for text-only submissions.
++assignment2.turnitin.asnnedit.use_turnitin = Use {0}
++assignment2.turnitin.asnnedit.attachment.warning = Reports will not be generated for text-only submissions.
+ assignment2.turnitin.asnnedit.supported_formats = Supported Formats
+ assignment2.turnitin.asnnedit.submit_papers_to = Submit papers to the following repository:
+ # These map to the AssignmentConstants.TII_VALUE_NO_REPO, TII_VALUE_INSTITUTION_REPO, and TII_VALUE_STANDARD_REPO values
+@@ -927,8 +927,8 @@
+ assignment2.turnitin.asnnedit.error.check_against2 = Please select at least one source.
+ 
+ # Student view
+-assignment2.turnitin.submit.warning.inst_and_student=Originality of attachments will be verified by Turnitin. Both you and your instructor will receive the results.
+-assignment2.turnitin.submit.warning.inst_only=Originality of attachments will be verified by Turnitin, and your instructor will receive the results.
++assignment2.turnitin.submit.warning.inst_and_student=Originality of attachments will be verified by {0}. Both you and your instructor will receive the results.
++assignment2.turnitin.submit.warning.inst_only=Originality of attachments will be verified by {0}, and your instructor will receive the results.
+ assignment2.turnitin.file_requirements = Requirements for files submitted to Turnitin
+ 
+ # Error messages returned by content review service
+@@ -997,4 +997,4 @@
+ assignment2.event.retractAllFeedback = Feedback retracted for all students.
+ assignment2.event.releaseAllGrades = Grades released for all students.
+ assignment2.event.retractAllGrades = Grades retracted for all students.
+-assignment2.event.uploadFeedbackAndGrades = Grades and feedback uploaded as csv or zip file.
+\ No newline at end of file
++assignment2.event.uploadFeedbackAndGrades = Grades and feedback uploaded as csv or zip file.
+Index: impl/src/java/org/sakaiproject/assignment2/logic/impl/AssignmentLogicImpl.java
+===================================================================
+--- impl/src/java/org/sakaiproject/assignment2/logic/impl/AssignmentLogicImpl.java	(revision 87902)
++++ impl/src/java/org/sakaiproject/assignment2/logic/impl/AssignmentLogicImpl.java	(working copy)
+@@ -283,6 +283,7 @@
+             if (!externalContentReviewLogic.isContentReviewAvailable(assignment.getContextId())) {
+                 if (log.isDebugEnabled()) log.debug("Content review turned off b/c not available in this site");
+                 assignment.setContentReviewEnabled(false);
++                assignment.setContentReviewStudentViewReport(false);
+             }
+         }
+ 
+@@ -457,6 +458,7 @@
+                 // we don't want TII enabled to be left as true
+                 if (newIntegration) {
+                     assignment.setContentReviewEnabled(false);
++                    assignment.setContentReviewStudentViewReport(false);
+                     assignment.setContentReviewRef(null);
+                     dao.update(assignment);
+                 }
+@@ -1091,6 +1093,7 @@
+         assignDef.setGraded(assignment.isGraded());
+         assignDef.setRequiresSubmission(assignment.isRequiresSubmission());
+         assignDef.setContentReviewEnabled(assignment.isContentReviewEnabled());
++        assignDef.setContentReviewStudentViewReport(assignment.isContentReviewStudentViewReport());
+ 
+         // if it is graded, we need to retrieve the name of the associated gb item
+         if (assignment.isGraded() && assignment.getGradebookItemId() != null &&
+Index: impl/src/java/org/sakaiproject/assignment2/logic/impl/AssignmentSubmissionLogicImpl.java
+===================================================================
+--- impl/src/java/org/sakaiproject/assignment2/logic/impl/AssignmentSubmissionLogicImpl.java	(revision 87902)
++++ impl/src/java/org/sakaiproject/assignment2/logic/impl/AssignmentSubmissionLogicImpl.java	(working copy)
+@@ -395,12 +395,16 @@
+         // ASNN-516 now let's run these attachments through the content review service, if appropriate
+         if (!version.isDraft() && assignment.isContentReviewEnabled() && subAttachSet != null) {
+             if (contentReviewLogic.isContentReviewAvailable(assignment.getContextId())) {
++            	Set<SubmissionAttachment> attachments = new HashSet<SubmissionAttachment>();
+                 for (SubmissionAttachment att : subAttachSet) {
+                     if (contentReviewLogic.isAttachmentAcceptableForReview(att.getAttachmentReference())) {
+                         if (log.isDebugEnabled()) log.debug("Adding attachment " + att.getAttachmentReference() + " to review queue for student " + userId);
+-                        contentReviewLogic.reviewAttachment(userId, assignment, att.getAttachmentReference());
++                        attachments.add(att);
+                     }
+                 }
++                if(attachments.size() > 0){
++                    contentReviewLogic.reviewAttachment(userId, assignment, attachments);
++                }
+             }
+         }
+     }
+Index: impl/src/java/org/sakaiproject/assignment2/logic/impl/ExternalContentReviewLogicImpl.java
+===================================================================
+--- impl/src/java/org/sakaiproject/assignment2/logic/impl/ExternalContentReviewLogicImpl.java	(revision 87902)
++++ impl/src/java/org/sakaiproject/assignment2/logic/impl/ExternalContentReviewLogicImpl.java	(working copy)
+@@ -26,10 +26,12 @@
+ import java.text.DateFormat;
+ import java.text.SimpleDateFormat;
+ import java.util.ArrayList;
++import java.util.Arrays;
+ import java.util.Collection;
+ import java.util.HashMap;
+ import java.util.List;
+ import java.util.Map;
++import java.util.Set;
+ 
+ import org.apache.commons.logging.Log;
+ import org.apache.commons.logging.LogFactory;
+@@ -88,7 +90,8 @@
+         if (contentReview != null) {
+             // check and see if Turnitin was enabled
+             String turnitinEnabled = serverConfigurationService.getString(AssignmentConstants.TII_ENABLED, "false");
+-            if ("true".equals(turnitinEnabled)) {
++            String contentReviewEnabled = serverConfigurationService.getString(AssignmentConstants.CONTENT_REVIEW_ENABLED, "false");
++            if ("true".equals(turnitinEnabled) || "true".equals(contentReviewEnabled)) {
+                 // we need to see if it was enabled at the site level
+                 Site site = externalLogic.getSite(siteId);
+                 if (site != null && contentReview.isSiteAcceptable(site)) {
+@@ -107,20 +110,32 @@
+         return isContentReviewAvailable(siteId);
+     }
+ 
+-    public void reviewAttachment(String userId, Assignment2 assign, String attachmentReference) {
+-        if (assign == null || attachmentReference == null) {
++    public void reviewAttachment(String userId, Assignment2 assign, Set<SubmissionAttachment> attachments) {
++        if (assign == null || attachments == null) {
+             throw new IllegalArgumentException("Null assignment or contentId passed to " +
+-                    "reviewAttachments. assign: " + " contentId: " + attachmentReference);
++                    "reviewAttachments. assign: " + " contentId: ");
+         }
+ 
+         try
+         {
+-            contentReview.queueContent(userId, assign.getContextId(), getTaskId(assign), attachmentReference);
++        	List<ContentResource> resources = new ArrayList<ContentResource>();
++        	for(SubmissionAttachment attach : attachments){
++        		ContentResource resource = contentLogic.getContentResource(attach.getAttachmentReference());
++        		if(resource != null){
++        			resources.add(resource);
++        		}
++        	}
++        	
++            if (resources.size() > 0) {
++            	contentReview.queueContent(userId, assign.getContextId(), getTaskId(assign), resources);
++            }else{
++            	throw new IllegalArgumentException("contentId passed to reviewAttachments is invalid and can't be found; contentId: ");
++            }
+         }
+         catch (QueueException e)
+         {
+             // this is thrown if this attachment has already been queued
+-            log.warn("Attempt to queue content via the ContentReviewService that has already been queued. Content id:" + attachmentReference);
++            log.warn("Attempt to queue content via the ContentReviewService that has already been queued. Content id:");
+         }
+     }
+ 
+@@ -186,7 +201,7 @@
+         }
+     }
+     
+-    public void populateReviewProperties(Assignment2 assignment, Collection<SubmissionAttachment> attachments, boolean instructorView) {
++    public void populateReviewProperties(Assignment2 assignment, Collection<SubmissionAttachment> attachments, boolean instructorView, String userId) {
+         if (assignment == null) {
+             throw new IllegalArgumentException("Null assignment passed to populateReviewProperties");
+         }
+@@ -203,8 +218,7 @@
+                     populateAssignmentPropertiesFromAssignment(assignment);
+                 }
+ 
+-                if (assignment.getProperties() != null && assignment.getProperties().containsKey("s_view_report") && 
+-                        (Boolean)assignment.getProperties().get("s_view_report")) {
++                if (assignment.isContentReviewStudentViewReport()) {
+                     populateReports = true;
+                 } else {
+                     populateReports = false;
+@@ -237,15 +251,36 @@
+                         {
+                             Long status = contentReview.getReviewStatus(attach.getAttachmentReference());
+                             reviewItem.setStatus(status);
++                            if(!"TurnItIn".equalsIgnoreCase(contentReview.getServiceName())){
++                            	//look up score if it exist
++                            	int reviewScore = contentReview.getReviewScore(attach.getAttachmentReference(), getTaskId(assignment), userId);
++                            	reviewItem.setReviewScore(reviewScore);
++                            	if(reviewItem.getStatus() == null && reviewScore >= 0){
++                            		//found the score, set status to 3l
++                            		reviewItem.setStatus(3l);
++                            	}
++                            }
+                         }
+                         catch (QueueException e)
+                         {
+                             if (log.isDebugEnabled()) log.debug("Attempt to retrieve status for attachment that has not been queued");
+                             // this attachment has not been submitted so leave ContentReviewItem empty
++                            ContentResource resource = contentLogic.getContentResource(attach.getAttachmentReference());
++                            if(resource != null){
++                                try {
++                                    contentReview.queueContent(userId, assignment.getContextId(), getTaskId(assignment), Arrays.asList(resource));
++                                } catch (QueueException e1) {
++                                    if (log.isDebugEnabled()) log.debug("Attempt to re-queue but failed", e);
++                                }
++                            }
++                        } catch (ReportException e) {
++                            if (log.isDebugEnabled()) log.debug("Report exception, requeueing", e);
++                        } catch (Exception e) {
++                            if (log.isDebugEnabled()) log.debug("Attempt to retrieve status for attachment that has not been queued", e);
+                         }
+                     }
+ 
+-                    populateProperties(assignment, reviewItem, attach, instructorView);
++                    populateProperties(assignment, reviewItem, attach, instructorView, userId);
+                 }
+             }
+         }
+@@ -257,7 +292,7 @@
+      * @param attach
+      * @param instructorView true if this is for the instructor view. false if for student view
+      */
+-    private void populateProperties(Assignment2 assign, ContentReviewItem reviewItem, SubmissionAttachment attach, boolean instructorView) {
++    private void populateProperties(Assignment2 assign, ContentReviewItem reviewItem, SubmissionAttachment attach, boolean instructorView, String userId) {
+         if (assign == null) {
+             throw new IllegalArgumentException("Null assign passed to populateProperties");
+         }
+@@ -274,7 +309,7 @@
+                 } 
+                 
+                 // now retrieve the report url if status shows it exists
+-                String reportUrl = getReportUrl(attach.getAttachmentReference(), instructorView);
++                String reportUrl = getReportUrl(attach.getAttachmentReference(), assign, instructorView, userId);
+                 if (reportUrl != null) {
+                     reviewInfo.setReviewUrl(reportUrl);
+                 }
+@@ -286,7 +321,7 @@
+         }
+     }
+     
+-    public String getReportUrl(String attachmentReference, boolean instructorView) {
++    public String getReportUrl(String attachmentReference, Assignment2 assign, boolean instructorView, String userId) {
+         if (attachmentReference == null) {
+             throw new IllegalArgumentException("Null attachmentReference passed to getReportUrl");
+         }
+@@ -296,7 +331,7 @@
+         if (instructorView) {
+             try
+             {
+-                reportUrl = contentReview.getReviewReportInstructor(attachmentReference);
++                reportUrl = contentReview.getReviewReportInstructor(attachmentReference, getTaskId(assign), userId);
+             }
+             catch (QueueException e)
+             {
+@@ -313,7 +348,7 @@
+         } else {
+             try
+             {
+-                reportUrl = contentReview.getReviewReportStudent(attachmentReference);
++                reportUrl = contentReview.getReviewReportStudent(attachmentReference, getTaskId(assign), userId);
+             }
+             catch (QueueException e)
+             {
+@@ -379,14 +414,16 @@
+             // never ever stops us from loading an assignment.
+             log.error(e);
+         }
+-        
++        if(asnnmap == null){
++        	asnnmap = new HashMap();
++        }
+         boolean useGradeMark = serverConfigurationService.getBoolean(AssignmentConstants.TII_PROP_GRADEMARK_ENABLED, false);
+         //Check Grade
+         if(useGradeMark){
+             try {
+                 contentReview.getReviewScore(assign.getContextId()+
+                         "#"+assign.getContentReviewRef()+
+-                        "#"+assign.getTitle());
++                        "#"+assign.getTitle(), getTaskId(assign), null);
+ 
+             }catch(Exception e){
+                 log.error(e);
+@@ -457,6 +494,10 @@
+     private void setTurnitinBooleanOption(Map asnnobj, String mapname, Assignment2 assign, String propname) {
+         if (asnnobj.containsKey(mapname) && asnnobj.get(mapname).equals("1")) {
+             assign.getProperties().put(propname, new Boolean(true));
++            if(AssignmentConstants.TII_API_PARAM_S_VIEW_REPORT.equals(propname)){
++            	//this handles old assignments that relied on TII for this setting (instead of sakai's db)
++            	assign.setContentReviewStudentViewReport(true);
++            }
+         }
+         else {
+             assign.getProperties().put(propname, new Boolean(false));
+@@ -503,6 +544,7 @@
+         }
+         
+         try {
++        	opts.put("title", assign.getTitle());
+             contentReview.createAssignment(assign.getContextId(), 
+                     this.getTaskId(assign), opts);
+         } catch (Exception e) {
+@@ -530,5 +572,9 @@
+     public void setExternalLogic(ExternalLogic externalLogic) {
+         this.externalLogic = externalLogic;
+     }
++    
++    public String getServiceName(){
++    	return contentReview.getServiceName();
++    }
+ 
+ }
+\ No newline at end of file
+Index: impl/src/java/org/sakaiproject/assignment2/logic/impl/ImportExportLogicImpl.java
+===================================================================
+--- impl/src/java/org/sakaiproject/assignment2/logic/impl/ImportExportLogicImpl.java	(revision 87902)
++++ impl/src/java/org/sakaiproject/assignment2/logic/impl/ImportExportLogicImpl.java	(working copy)
+@@ -211,9 +211,11 @@
+                         // content review settings
+                         if (contentReviewAvailable) {
+                             newAssignment.setContentReviewEnabled(assignDef.isContentReviewEnabled());
++                            newAssignment.setContentReviewStudentViewReport(assignDef.isContentReviewStudentViewReport());
+                             newAssignment.setProperties(assignDef.getProperties());
+                         } else {
+                             newAssignment.setContentReviewEnabled(false);
++                            newAssignment.setContentReviewStudentViewReport(false);
+                         }
+ 
+                         // if this item is graded, we need to link it up to a 
+Index: tool/src/java/org/sakaiproject/assignment2/tool/beans/Assignment2Creator.java
+===================================================================
+--- tool/src/java/org/sakaiproject/assignment2/tool/beans/Assignment2Creator.java	(revision 87902)
++++ tool/src/java/org/sakaiproject/assignment2/tool/beans/Assignment2Creator.java	(working copy)
+@@ -94,6 +94,7 @@
+         dup.setRequiresSubmission(assignment.isRequiresSubmission());
+         dup.setProperties(assignment.getProperties());
+         dup.setContentReviewEnabled(assignment.isContentReviewEnabled());
++        dup.setContentReviewStudentViewReport(assignment.isContentReviewStudentViewReport());
+ 
+         // let's duplicate the attachments and group restrictions
+         Set<AssignmentGroup> assignGroupSet = new HashSet<AssignmentGroup>();
+Index: tool/src/java/org/sakaiproject/assignment2/tool/beans/Assignment2Validator.java
+===================================================================
+--- tool/src/java/org/sakaiproject/assignment2/tool/beans/Assignment2Validator.java	(revision 87902)
++++ tool/src/java/org/sakaiproject/assignment2/tool/beans/Assignment2Validator.java	(working copy)
+@@ -21,11 +21,11 @@
+ 
+ package org.sakaiproject.assignment2.tool.beans;
+ 
++import org.sakaiproject.assignment2.logic.ExternalContentReviewLogic;
+ import org.sakaiproject.assignment2.logic.ExternalGradebookLogic;
+ import org.sakaiproject.service.gradebook.shared.Assignment;
+ import org.sakaiproject.assignment2.model.Assignment2;
+ import org.sakaiproject.assignment2.model.constants.AssignmentConstants;
+-
+ import org.sakaiproject.service.gradebook.shared.GradebookService.PointsPossibleValidation;
+ import org.sakaiproject.assignment2.logic.GradebookItem;
+ 
+@@ -52,6 +52,11 @@
+     public void setExternalGradebookLogic(ExternalGradebookLogic externalGradebookLogic) {
+         this.externalGradebookLogic = externalGradebookLogic;
+     }  
++    
++    private ExternalContentReviewLogic externalContentReviewLogic;
++    public void setExternalContentReviewLogic(ExternalContentReviewLogic externalContentReviewLogic){
++    	this.externalContentReviewLogic = externalContentReviewLogic;
++    }
+ 
+     /**
+      * Validates the Assignment2 object. Currently checks to make sure there
+@@ -159,7 +164,7 @@
+         }
+         
+         // Validate the turnitin options ASNN-516
+-        if (assignment.isContentReviewEnabled()) {     
++        if (assignment.isContentReviewEnabled() && AssignmentConstants.CONTENT_REVIEW_NAME_TII.equals(externalContentReviewLogic.getServiceName())) {     
+             // check to see if the user wants to generate reports related to due date
+             // but there is no due date
+             if (assignment.getProperties().containsKey("report_gen_speed") && 
+Index: tool/src/java/org/sakaiproject/assignment2/tool/beans/AssignmentAuthoringBean.java
+===================================================================
+--- tool/src/java/org/sakaiproject/assignment2/tool/beans/AssignmentAuthoringBean.java	(revision 87902)
++++ tool/src/java/org/sakaiproject/assignment2/tool/beans/AssignmentAuthoringBean.java	(working copy)
+@@ -234,10 +234,12 @@
+                 // we need to turn off turnitin since assignment doesn't accept submissions. the
+                 // turnitin section was hidden via javascript
+                 assignment.setContentReviewEnabled(false);
++                assignment.setContentReviewStudentViewReport(false);
+             } else if (!assignment.acceptsAttachments()) {
+                 // double check that this assignment is set up to accept attachments. if not, turn TII off
+                 // (this is done via javascript in the UI)
+                 assignment.setContentReviewEnabled(false);
++                assignment.setContentReviewStudentViewReport(false);
+             }
+         }
+     
+Index: tool/src/java/org/sakaiproject/assignment2/tool/entity/Assignment2SubmissionEntityProvider.java
+===================================================================
+--- tool/src/java/org/sakaiproject/assignment2/tool/entity/Assignment2SubmissionEntityProvider.java	(revision 87902)
++++ tool/src/java/org/sakaiproject/assignment2/tool/entity/Assignment2SubmissionEntityProvider.java	(working copy)
+@@ -524,16 +524,13 @@
+         
+         if (submissions != null && !submissions.isEmpty()) {
+             // collect all of the attachments for review
+-            List<SubmissionAttachment> attachToReview = new ArrayList<SubmissionAttachment>();
+             for (AssignmentSubmission submission : submissions) {
+                 AssignmentSubmissionVersion currVersion = submission.getCurrentSubmissionVersion();
+                 if (currVersion != null && currVersion.getSubmissionAttachSet() != null) {
+-                    attachToReview.addAll(currVersion.getSubmissionAttachSet());
++                    // populate the review properties on the attachments
++                    contentReviewLogic.populateReviewProperties(assign, currVersion.getSubmissionAttachSet(), true, submission.getUserId());
+                 }
+             }
+-            
+-            // populate the review properties on the attachments
+-            contentReviewLogic.populateReviewProperties(assign, attachToReview, true);
+         }
+     }
+ 
+Index: tool/src/java/org/sakaiproject/assignment2/tool/producers/AssignmentProducer.java
+===================================================================
+--- tool/src/java/org/sakaiproject/assignment2/tool/producers/AssignmentProducer.java	(revision 87902)
++++ tool/src/java/org/sakaiproject/assignment2/tool/producers/AssignmentProducer.java	(working copy)
+@@ -723,10 +723,21 @@
+      */
+     private void renderTurnitinArea(UIContainer tofill, String assignment2OTP,
+             Assignment2 assignment, UIForm form) {
+-        Map props = assignment.getProperties();
++      Map props = assignment.getProperties();
+ 
+-        UIOutput.make(tofill, "tii_content_review_area");
++      UIOutput.make(tofill, "tii_content_review_area");
+         
++      String contentReviewServiceName = externalContentReviewLogic.getServiceName();
++      boolean isTII = AssignmentConstants.CONTENT_REVIEW_NAME_TII.equals(contentReviewServiceName);
++      UIOutput.make(tofill, "assignment2.contentreview.asnnedit.title", contentReviewServiceName);
++        
++      UIBoundBoolean.make(form, "use_tii", assignment2OTP + ".contentReviewEnabled");
++      UIBoundBoolean.make(form, "allow_students_to_see_originality_checkbox", 
++              assignment2OTP + ".contentReviewStudentViewReport");
++      UIOutput.make(tofill, "tii_enabled_area");
++      UIOutput.make(tofill, "contentReview_properties");
++      UIMessage.make(tofill, "assignment2.turnitin.asnnedit.use_turnitin", "assignment2.turnitin.asnnedit.use_turnitin", new Object[] {contentReviewServiceName});
++      if(isTII){
+         // If a Turnitin assignment has already been created for this assignment,
+         // then we except there to be some sort of return code from the call
+         // that would have been made to populate the properties.
+@@ -745,7 +756,7 @@
+             }
+         }
+ 
+-        UIOutput.make(tofill, "tii_enabled_area");
++        
+         UIOutput.make(tofill, "tii_properties");
+         
+         // add the supported formats link, if specified in sakai.properties
+@@ -754,7 +765,6 @@
+             UILink.make(tofill, "tii_supported_formats", messageLocator.getMessage("assignment2.turnitin.asnnedit.supported_formats"), supportedFormatsUrl);
+         }
+ 
+-        UIBoundBoolean.make(form, "use_tii", assignment2OTP + ".contentReviewEnabled");
+ 
+         // Submit papers to repository
+         List<String> repoOptions = localTurnitinLogic.getSubmissionRepositoryOptions();
+@@ -845,10 +855,9 @@
+         UISelectChoice.make(form, "gen_report_on_due_date", gen_reports_select_id, 1);
+         UISelectLabel.make(form, "gen_report_on_due_date_label", gen_reports_select_id, 1);
+         
+-        UIBoundBoolean.make(form, "allow_students_to_see_originality_checkbox", 
+-                assignment2OTP + ".properties.s_view_report");
+         
+         
++        
+         // set the checkboxes to default to true
+         boolean checkPaperRepo = assignment.getProperties().containsKey("s_paper_check") ? 
+                 (Boolean)assignment.getProperties().get("s_paper_check") : true;
+@@ -944,6 +953,7 @@
+             UIBoundBoolean.make(form, "ets_usage_checkbox",assignment2OTP + ".properties.ets_usage", ets_usage);
+             
+         }
++      }
+     }
+ 
+     public ViewParameters getViewParameters() {
+Index: tool/src/java/org/sakaiproject/assignment2/tool/producers/GradeProducer.java
+===================================================================
+--- tool/src/java/org/sakaiproject/assignment2/tool/producers/GradeProducer.java	(revision 87902)
++++ tool/src/java/org/sakaiproject/assignment2/tool/producers/GradeProducer.java	(working copy)
+@@ -580,7 +580,7 @@
+                 UIOutput.make(versionContainer, "submitted_attachments_fieldset");
+ 
+                 if (contentReviewEnabled && version.getSubmissionAttachSet() != null && !version.getSubmissionAttachSet().isEmpty()) {
+-                    contentReviewLogic.populateReviewProperties(assignment, version.getSubmissionAttachSet(), true);
++                    contentReviewLogic.populateReviewProperties(assignment, version.getSubmissionAttachSet(), true, version.getAssignmentSubmission().getUserId());
+                 }
+ 
+                 attachmentListRenderer.makeAttachmentFromSubmissionAttachmentSet(versionContainer, "submitted_attachment_list:", params.viewID, 
+Index: tool/src/java/org/sakaiproject/assignment2/tool/producers/renderers/AsnnSubmissionVersionRenderer.java
+===================================================================
+--- tool/src/java/org/sakaiproject/assignment2/tool/producers/renderers/AsnnSubmissionVersionRenderer.java	(revision 87902)
++++ tool/src/java/org/sakaiproject/assignment2/tool/producers/renderers/AsnnSubmissionVersionRenderer.java	(working copy)
+@@ -123,7 +123,7 @@
+             if (submissionType == AssignmentConstants.SUBMIT_ATTACH_ONLY || submissionType == AssignmentConstants.SUBMIT_INLINE_AND_ATTACH) {
+                 if (asnnSubVersion.getSubmissionAttachSet() != null && !asnnSubVersion.getSubmissionAttachSet().isEmpty()){
+                     if (assignment.isContentReviewEnabled() && contentReviewLogic.isContentReviewAvailable(assignment.getContextId())) {
+-                        contentReviewLogic.populateReviewProperties(assignment, asnnSubVersion.getSubmissionAttachSet(), false);
++                        contentReviewLogic.populateReviewProperties(assignment, asnnSubVersion.getSubmissionAttachSet(), false, asnnSubVersion.getAssignmentSubmission().getUserId());
+                     }
+                     UIMessage.make(joint, "submission-attachments-header", "assignment2.student-submit.submitted_attachments");
+                     attachmentListRenderer.makeAttachmentFromSubmissionAttachmentSet(joint, "submission-attachment-list:", viewParameters.viewID, 
+Index: tool/src/java/org/sakaiproject/assignment2/tool/producers/renderers/AsnnSubmitEditorRenderer.java
+===================================================================
+--- tool/src/java/org/sakaiproject/assignment2/tool/producers/renderers/AsnnSubmitEditorRenderer.java	(revision 87902)
++++ tool/src/java/org/sakaiproject/assignment2/tool/producers/renderers/AsnnSubmitEditorRenderer.java	(working copy)
+@@ -341,10 +341,10 @@
+                 attachSection.decorate(new UIFreeAttributeDecorator("class", "messageConfirmation"));
+             }
+             
+-            if (assignment.getProperties().containsKey("s_view_report") && (Boolean)assignment.getProperties().get("s_view_report")) {
+-                UIMessage.make(joint, "plagiarism_check", "assignment2.turnitin.submit.warning.inst_and_student");
++            if (assignment.isContentReviewStudentViewReport()) {
++                UIMessage.make(joint, "plagiarism_check", "assignment2.turnitin.submit.warning.inst_and_student", new Object[]{contentReviewLogic.getServiceName()});
+             } else {
+-                UIMessage.make(joint, "plagiarism_check", "assignment2.turnitin.submit.warning.inst_only");
++                UIMessage.make(joint, "plagiarism_check", "assignment2.turnitin.submit.warning.inst_only", new Object[]{contentReviewLogic.getServiceName()});
+             }
+             
+             String fileRequirementsUrl = localTurnitinLogic.getSupportedFormatsUrl();
+Index: tool/src/webapp/WEB-INF/requestContext.xml
+===================================================================
+--- tool/src/webapp/WEB-INF/requestContext.xml	(revision 87902)
++++ tool/src/webapp/WEB-INF/requestContext.xml	(working copy)
+@@ -504,6 +504,7 @@
+ 	<!-- Validators -->
+ 	<bean id="assignment2Validator" class="org.sakaiproject.assignment2.tool.beans.Assignment2Validator">
+     	<property name="externalGradebookLogic" ref="org.sakaiproject.assignment2.logic.ExternalGradebookLogic"></property>
++    	<property name="externalContentReviewLogic" ref="org.sakaiproject.assignment2.logic.ExternalContentReviewLogic"></property>
+ 	</bean>
+ 
+     <!-- ASNN-521 -->
+Index: tool/src/webapp/content/js/assignment.js
+===================================================================
+--- tool/src/webapp/content/js/assignment.js	(revision 87902)
++++ tool/src/webapp/content/js/assignment.js	(working copy)
+@@ -1310,7 +1310,8 @@
+         
+         // validate the turnitin options ASNN-516
+         var useTiiOption = jQuery("input[name='page-replace\:\:use_tii']").get(0);
+-        if (useTiiOption && useTiiOption.checked) {
++        var contentReviewName = jQuery(".contentReviewName").html();
++        if (useTiiOption && useTiiOption.checked && "TurnItIn" === contentReviewName) {
+           // see if at least one checkbox was checked for the "check against" option
+           if (jQuery("input[name='page-replace\:\:check_against_student_repo_checkbox']").is(':checked') ||
+               jQuery("input[name='page-replace\:\:check_against_internet_repo_checkbox']").is(':checked') ||
+Index: tool/src/webapp/content/templates/assignment.html
+===================================================================
+--- tool/src/webapp/content/templates/assignment.html	(revision 87902)
++++ tool/src/webapp/content/templates/assignment.html	(working copy)
+@@ -293,7 +293,7 @@
+ 	</fieldset>
+ 	
+ 	<fieldset rsf:id="tii_content_review_area" id="">
+-        <legend rsf:id="msg=assignment2.turnitin.asnnedit.title">Turnitin</legend>
++        <legend rsf:id="assignment2.contentreview.asnnedit.title" class="contentReviewName">Turnitin</legend>
+ 
+         <div rsf:id="tii_errors" class="generalErrors">
+           <div style="display:inline">
+@@ -306,15 +306,30 @@
+         <div id="tii_enabled_area" rsf:id="tii_enabled_area" style="clear:both">
+             <p class="asnnOptionsSubsection">
+               <input type="checkbox" rsf:id="use_tii" id="use_tii" />
+-              <label for="use_tii" rsf:id="msg=assignment2.turnitin.asnnedit.use_turnitin" id="">Use Turnitin</label>
++              <label for="use_tii" rsf:id="assignment2.turnitin.asnnedit.use_turnitin" id="">Use Turnitin</label>
+               <a rsf:id="tii_supported_formats" class="supported_formats_link" target="_blank">Supported Formats!</a>
+               <span class="inlineMessage messageConfirmation" style="display: none;" id="tii_attach_warning" rsf:id="msg=assignment2.turnitin.asnnedit.attachment.warning">Turnitin supports attachments only. Reports will not be generated for text-only submissions!!</span>
+             </p>
+             
+         </div>
++        <div id="contentReview_properties" rsf:id="contentReview_properties" style="clear:both; display: none;">
++          <div class="asnnOptionsSubsection">
++              <div class="liItem">
++              	  <div class="liItem">
++                      <input type="checkbox" rsf:id="allow_students_to_see_originality_checkbox" id="allow_students_to_see_originality_checkbox" />
++                      <label for="allow_students_to_see_originality_checkbox" rsf:id="msg=assignment2.turnitin.asnnedit.allow_students_to_see_originality_reports">Allow students to see originality reports</label>
++                  </div>
++              </div>
++           </div>
++        </div>
+         <div id="tii_properties" rsf:id="tii_properties" style="clear:both; display: none;">
+           <div class="asnnOptionsSubsection">
+-              
++              <div class="liItem">
++              	  <div class="liItem">
++                      <input type="checkbox" rsf:id="allow_students_to_see_originality_checkbox" id="allow_students_to_see_originality_checkbox" />
++                      <label for="allow_students_to_see_originality_checkbox" rsf:id="msg=assignment2.turnitin.asnnedit.allow_students_to_see_originality_reports">Allow students to see originality reports</label>
++                  </div>
++              </div>
+               <div class="liItem" rsf:id="submit_to_options">
+                 <div rsf:id="msg=assignment2.turnitin.asnnedit.submit_papers_to" class="asnnOption">Submit papers to </div>
+                 <span rsf:id="submit_to_repo_radios" />
+@@ -338,10 +353,6 @@
+                       <input rsf:id="gen_report_on_due_date" id="gen_report_on_due_date" name="gen_reports" type="radio" onchange="asnn2.showHideGradeSettingError();"/> 
+                       <label for="gen_report_on_due_date" rsf:id="gen_report_on_due_date_label">On due date!</label><span rsf:id="msg=assignment2.turnitin.asnnedit.generate_originality_reports.no_due_date" id="gen_reports_no_due_date" class="messageConfirmation">No due date was set!</span>
+                   </div>
+-                  <div class="liItem">
+-                      <input type="checkbox" rsf:id="allow_students_to_see_originality_checkbox" id="allow_students_to_see_originality_checkbox" />
+-                      <label for="allow_students_to_see_originality_checkbox" rsf:id="msg=assignment2.turnitin.asnnedit.allow_students_to_see_originality_reports">Allow students to see originality reports</label>
+-                  </div>
+               </div>
+               <div class="liItem">
+                   <span rsf:id="msg=assignment2.turnitin.asnnedit.check_originality_against">Check originality against:</span><span style="display:none" id="assignment_check_against2" rsf:id="msg=assignment2.turnitin.asnnedit.error.check_against2" class="messageError">Select one!</span>
+@@ -550,16 +561,19 @@
+     jQuery("input[name='page-replace\:\:title']").focus();
+ 
+     // Init TII area
++    var contentReview_options = jQuery('#page-replace\\:\\:contentReview_properties').get(0);
+     var tii_options = jQuery('#page-replace\\:\\:tii_properties').get(0);
+     var tii = jQuery("input[name='page-replace\:\:use_tii']").get(0);
+     var erater_options = jQuery('#page-replace\\:\\:erater_enabled').get(0);
+     var erater_checkbox = jQuery("input[name='page-replace\:\:erater_checkbox']").get(0);
+     jQuery(tii).click(function(){
+         asnn2.showHideByCheckbox(this, tii_options);
++        asnn2.showHideByCheckbox(this, contentReview_options);
+         asnn2editpage.tii_attachWarning(); // display the warning about text submissions if appropriate
+     });
+     // initialize the TII display
+     asnn2.showHideByCheckbox(tii, tii_options);
++    asnn2.showHideByCheckbox(tii, contentReview_options);
+ 
+     jQuery(erater_checkbox).click(function(){
+         asnn2.showHideByCheckbox(this, erater_options);
