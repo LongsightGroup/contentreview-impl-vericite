@@ -477,6 +477,23 @@ Index: impl/src/java/org/sakaiproject/assignment2/logic/impl/ImportExportLogicIm
                          }
  
                          // if this item is graded, we need to link it up to a 
+Index: impl/src/test/org/sakaiproject/assignment2/logic/test/stubs/GradebookServiceStub.java
+===================================================================
+--- impl/src/test/org/sakaiproject/assignment2/logic/test/stubs/GradebookServiceStub.java	(revision 87902)
++++ impl/src/test/org/sakaiproject/assignment2/logic/test/stubs/GradebookServiceStub.java	(working copy)
+@@ -911,4 +911,12 @@
+         // TODO Auto-generated method stub
+         return null;
+     }
++
++    @Override 
++    public String getAverageCourseGrade(String arg0) { 
++        // TODO Auto-generated method stub 
++        return null; 
++    }
++
++
+ }
 Index: tool/src/java/org/sakaiproject/assignment2/tool/beans/Assignment2Creator.java
 ===================================================================
 --- tool/src/java/org/sakaiproject/assignment2/tool/beans/Assignment2Creator.java	(revision 87902)
