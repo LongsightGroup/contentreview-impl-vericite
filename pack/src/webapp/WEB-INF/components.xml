@@ -11,7 +11,8 @@
 		 <property name="userDirectoryService" ref="org.sakaiproject.user.api.UserDirectoryService" />
 		 <property name="entityManager" ref="org.sakaiproject.entity.api.EntityManager" />
 		 <property name="securityService" ref="org.sakaiproject.authz.api.SecurityService"/>
-	</bean>
+	         <property name="siteService" ref="org.sakaiproject.site.api.SiteService" />
+        </bean>
 
 	<bean
 		id="org.sakaiproject.contentreview.service.ContentReviewSiteAdvisor"
