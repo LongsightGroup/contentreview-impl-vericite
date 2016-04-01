@@ -1,1 +1,1 @@
-Please refer to http://www.longsight.com/vericite/help/installation/sakai.html for installation
+Please refer to http://help.vericite.com/m/installation/l/470557-sakai-installation-guide
