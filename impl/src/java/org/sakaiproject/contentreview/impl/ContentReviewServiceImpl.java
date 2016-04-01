@@ -407,17 +407,20 @@ public class ContentReviewServiceImpl implements ContentReviewService {
 						if(contentId.equals(scoreResponse.getExternalContentId())){
 							score = scoreResponse.getScore();
 						}
-						Map<String, Map<String, Object[]>> userCacheMap = contentScoreCache.get(scoreResponse.getAssignment());
-						if(userCacheMap == null){
-							userCacheMap = new HashMap<String, Map<String, Object[]>>();
+						//only cache the score if it is > 0
+						if(scoreResponse.getScore() != null && scoreResponse.getScore().intValue() >= 0){
+							Map<String, Map<String, Object[]>> userCacheMap = contentScoreCache.get(scoreResponse.getAssignment());
+							if(userCacheMap == null){
+								userCacheMap = new HashMap<String, Map<String, Object[]>>();
+							}
+							Map<String, Object[]> cacheMap = userCacheMap.get(scoreResponse.getUser());
+							if(cacheMap == null){
+								cacheMap = new HashMap<String, Object[]>();
+							}
+							cacheMap.put(scoreResponse.getExternalContentId(), new Object[]{scoreResponse.getScore(), new Date()});
+							userCacheMap.put(scoreResponse.getUser(), cacheMap);								
+							contentScoreCache.put(scoreResponse.getAssignment(), userCacheMap);
 						}
-						Map<String, Object[]> cacheMap = userCacheMap.get(scoreResponse.getUser());
-						if(cacheMap == null){
-							cacheMap = new HashMap<String, Object[]>();
-						}
-						cacheMap.put(scoreResponse.getExternalContentId(), new Object[]{scoreResponse.getScore(), new Date()});
-						userCacheMap.put(scoreResponse.getUser(), cacheMap);								
-						contentScoreCache.put(scoreResponse.getAssignment(), userCacheMap);
 					}
 				}
 				if(score == null){
