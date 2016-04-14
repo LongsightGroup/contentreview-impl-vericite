@@ -47,6 +47,9 @@ import org.sakaiproject.entity.api.EntityProducer;
 import org.sakaiproject.entity.api.Reference;
 import org.sakaiproject.entity.api.ResourceProperties;
 import org.sakaiproject.exception.ServerOverloadException;
+import org.sakaiproject.memory.api.Cache;
+import org.sakaiproject.memory.api.MemoryService;
+import org.sakaiproject.memory.api.SimpleConfiguration;
 import org.sakaiproject.site.api.Site;
 import org.sakaiproject.site.api.SiteService;
 import org.sakaiproject.user.api.User;
@@ -68,26 +71,27 @@ public class ContentReviewServiceImpl implements ContentReviewService {
 	private static final String PARAM_USER_ROLE_LEARNER = "Learner";
 	private static final String SERVICE_NAME = "VeriCite";
 	private static final String VERICITE_API_VERSION = "v1";
+	private static final int VERICITE_SERVICE_CALL_THROTTLE_MINS = 2;
+	private static final String VERICITE_CACHE_PLACEHOLDER = "VERICITE_LAST_CHECKED";
 	
 	private String serviceUrl;
 	private String consumer;
 	private String consumerSecret;
 	
+	private MemoryService memoryService;
 	//Caches token requests for instructors so that we don't have to send a request for every student
-	// ContextId -> Object{token, date}
-	private Map<String, Map<String, Object[]>> userUrlCache = new HashMap<String, Map<String, Object[]>>();
-	private static final int CACHE_EXPIRE_MINS = 20;
-	
-	//Caches the content review item scores
-	// Assignment -> {user -> {contentId - > Object{score, date}}}
-	private Map<String, Map<String, Map<String, Object[]>>> contentScoreCache = new HashMap<String, Map<String, Map<String, Object[]>>>();
-	private Map<String, String> assignmentTitleCache = new HashMap<String, String>();
+	Cache userUrlCache, contentScoreCache, assignmentTitleCache;
+	private static final int CACHE_EXPIRE_URLS_MINS = 20;
+
 	private static final int CONTENT_SCORE_CACHE_MINS = 5;
 	
 	public void init(){
 		serviceUrl = serverConfigurationService.getString("vericite.serviceUrl", "");
 		consumer = serverConfigurationService.getString("vericite.consumer", "");
 		consumerSecret = serverConfigurationService.getString("vericite.consumerSecret", "");
+		userUrlCache = memoryService.createCache("org.sakaiproject.contentreview.vericite.ContentReviewServiceVeriCite.userUrlCache", new SimpleConfiguration(10000, CACHE_EXPIRE_URLS_MINS * 60, -1));
+		contentScoreCache = memoryService.createCache("org.sakaiproject.contentreview.vericite.ContentReviewServiceVeriCite.contentScoreCache", new SimpleConfiguration(10000, CONTENT_SCORE_CACHE_MINS * 60, -1));
+		assignmentTitleCache = memoryService.getCache("org.sakaiproject.contentreview.vericite.ContentReviewServiceVeriCite.assignmentTitleCache");
 	}
 	
 	public boolean allowResubmission() {
@@ -304,51 +308,82 @@ public class ContentReviewServiceImpl implements ContentReviewService {
 			String returnUrl = null;
 			String assignmentId = getAssignmentId(assignmentRef, isA2(contentId, assignmentRef));
 			//first check if cache already has the URL for this contentId and user
-			if(userUrlCache.containsKey(cacheKey) && userUrlCache.get(cacheKey).containsKey(contentId)){
-				//check if cache has expired:
-				Object[] cacheItem = userUrlCache.get(cacheKey).get(contentId);
-				Calendar cal = Calendar.getInstance();
-				cal.setTime(new Date());
-				//subtract the exipre time (currently set to 20 while the plag token is set to 30, leaving 10 mins in worse case for instructor to use token)
-				cal.add(Calendar.MINUTE, CACHE_EXPIRE_MINS * -1);
-				if(((Date) cacheItem[1]).after(cal.getTime())){
-					//token hasn't expired, use it
-					returnUrl = (String) cacheItem[0];
-				}else{
-					//token is expired, remove it
-					userUrlCache.get(cacheKey).remove(contentId);
+			if(userUrlCache.containsKey(cacheKey)){
+				Map<String, Object[]> userUrlCacheObj = (Map<String, Object[]>) userUrlCache.get(cacheKey);
+				if(userUrlCacheObj.containsKey(contentId)){
+					//check if cache has expired:
+					Object[] cacheItem = userUrlCacheObj.get(contentId);
+					Calendar cal = Calendar.getInstance();
+					cal.setTime(new Date());
+					//subtract the exipre time (currently set to 20 while the plag token is set to 30, leaving 10 mins in worse case for instructor to use token)
+					cal.add(Calendar.MINUTE, CACHE_EXPIRE_URLS_MINS * -1);
+					if(((Date) cacheItem[1]).after(cal.getTime())){
+						//token hasn't expired, use it
+						returnUrl = (String) cacheItem[0];
+					}else{
+						//token is expired, remove it
+						userUrlCacheObj.remove(contentId);
+						userUrlCache.put(cacheKey, userUrlCacheObj);
+					}
 				}
 			}
+			
 			if(StringUtils.isEmpty(returnUrl)){
-				//we couldn't find the URL in the cache, so look it up (if instructor, look up all URLs so reduce the number of calls to the API)
-				DefaultApi vericiteApi = getVeriCiteAPI();
-				String tokenUserRole = PARAM_USER_ROLE_LEARNER;
-				String externalContentIDFilter = null;
-				if(instructor){
-					tokenUserRole = PARAM_USER_ROLE_INSTRUCTOR;		
-				}else{
-					//since students will only be able to see their own content, make sure to filter it:
-					externalContentIDFilter = contentId;
-				}
-				List<ReportURLLinkReponse> urls = null;
-				try {
-					urls = vericiteApi.reportsUrlsContextIDGet(context, assignmentId, consumer, consumerSecret,  userId, tokenUserRole, null, externalContentIDFilter);
-				} catch (ApiException e) {
-					log.error(e.getMessage(), e);
-				}
-				if(urls != null){
-					for(ReportURLLinkReponse url : urls){
-						if(contentId.equals(url.getExternalContentID())){
-							//this is the current url requested
-							returnUrl = url.getUrl();
+				//instructors get all URLs at once, so only check VC every 2 minutes to avoid multiple calls in the same thread:
+				boolean skip = false;
+				if(instructor && userUrlCache.containsKey(cacheKey)){
+					Map<String, Object[]> userUrlCacheObj = (Map<String, Object[]>) userUrlCache.get(cacheKey);
+					if(userUrlCacheObj.containsKey(VERICITE_CACHE_PLACEHOLDER)){
+						Object[] cacheItem = userUrlCacheObj.get(VERICITE_CACHE_PLACEHOLDER);
+						Calendar cal = Calendar.getInstance();
+						cal.setTime(new Date());
+						//only check vericite every 2 mins to prevent subsequent calls from the same thread
+						cal.add(Calendar.MINUTE, VERICITE_SERVICE_CALL_THROTTLE_MINS * -1);
+						if(((Date) cacheItem[1]).after(cal.getTime())){
+							//we just checked VC, skip asking again
+							skip = true;
 						}
-						//store in cache for later
-						Map<String, Object[]> cacheObject = userUrlCache.get(cacheKey);
+					}
+				}
+				if(!skip){
+					//we couldn't find the URL in the cache, so look it up (if instructor, look up all URLs so reduce the number of calls to the API)
+					DefaultApi vericiteApi = getVeriCiteAPI();
+					String tokenUserRole = PARAM_USER_ROLE_LEARNER;
+					String externalContentIDFilter = null;
+					if(instructor){
+						tokenUserRole = PARAM_USER_ROLE_INSTRUCTOR;	
+						//keep track of last call to make sure we don't call VC too much
+						Object cacheObject = userUrlCache.get(cacheKey);
 						if(cacheObject == null){
 							cacheObject = new HashMap<String, Object[]>();
 						}
-						cacheObject.put(url.getExternalContentID(), new Object[]{url.getUrl(), new Date()});
+						((Map<String, Object[]>) cacheObject).put(VERICITE_CACHE_PLACEHOLDER, new Object[]{VERICITE_CACHE_PLACEHOLDER, new Date()});
 						userUrlCache.put(cacheKey, cacheObject);
+					}else{
+						//since students will only be able to see their own content, make sure to filter it:
+						externalContentIDFilter = contentId;
+					}
+					List<ReportURLLinkReponse> urls = null;
+					try {
+						urls = vericiteApi.reportsUrlsContextIDGet(context, assignmentId, consumer, consumerSecret,  userId, tokenUserRole, null, externalContentIDFilter);
+					} catch (ApiException e) {
+						log.error(e.getMessage(), e);
+					}
+					if(urls != null){
+						for(ReportURLLinkReponse url : urls){
+							if(contentId.equals(url.getExternalContentID())){
+								//this is the current url requested
+								returnUrl = url.getUrl();
+							}
+							//store in cache for later
+							//store in cache for later
+							Object cacheObject = userUrlCache.get(cacheKey);
+							if(cacheObject == null){
+								cacheObject = new HashMap<String, Object[]>();
+							}
+							((Map<String, Object[]>) cacheObject).put(url.getExternalContentID(), new Object[]{url.getUrl(), new Date()});
+							userUrlCache.put(cacheKey, cacheObject);
+						}
 					}
 				}
 			}
@@ -373,29 +408,48 @@ public class ContentReviewServiceImpl implements ContentReviewService {
 		String context = getSiteIdFromConentId(contentId);
 		Integer score = null;
 		String assignment = getAssignmentId(assignmentRef, isA2);
-		if(assignment != null){
-			if(contentScoreCache.containsKey(assignment) 
-					&& contentScoreCache.get(assignment).containsKey(userId) 
-					&& contentScoreCache.get(assignment).get(userId).containsKey(contentId)){
-				Object[] cacheItem = contentScoreCache.get(assignment).get(userId).get(contentId);
-				Calendar cal = Calendar.getInstance();
-				cal.setTime(new Date());
-				//subtract the exipre time
-				cal.add(Calendar.MINUTE, CONTENT_SCORE_CACHE_MINS * -1);
-				if(((Date) cacheItem[1]).after(cal.getTime())){
-					//token hasn't expired, use it
-					score = (Integer) cacheItem[0];
-				}else{
-					//token is expired, remove it
-					contentScoreCache.get(assignment).remove(userId);
+		if(StringUtils.isNotEmpty(assignment)){
+			if(contentScoreCache.containsKey(assignment)){
+				Map<String, Map<String, Object[]>> contentScoreCacheObject = (Map<String, Map<String, Object[]>>) contentScoreCache.get(assignment);
+				if(contentScoreCacheObject.containsKey(userId) 
+						&& contentScoreCacheObject.get(userId).containsKey(contentId)){
+					Object[] cacheItem = contentScoreCacheObject.get(userId).get(contentId);
+					Calendar cal = Calendar.getInstance();
+					cal.setTime(new Date());
+					//subtract the exipre time
+					cal.add(Calendar.MINUTE, CONTENT_SCORE_CACHE_MINS * -1);
+					if(((Date) cacheItem[1]).after(cal.getTime())){
+						//token hasn't expired, use it
+						score = (Integer) cacheItem[0];
+					}else{
+						//token is expired, remove it
+						contentScoreCacheObject.remove(userId);
+						contentScoreCache.put(assignment, contentScoreCacheObject);
+					}
 				}
-
 			}
-		}
-		
+		}		
 		if(score == null){
 			//wasn't in cache
-			if(context != null){
+			boolean skip = false;
+			if(StringUtils.isNotEmpty(assignment)
+					&& contentScoreCache.containsKey(assignment)){ 
+				Map<String, Map<String, Object[]>> contentScoreCacheObject = (Map<String, Map<String, Object[]>>) contentScoreCache.get(assignment);
+				if(contentScoreCacheObject.containsKey(VERICITE_CACHE_PLACEHOLDER)
+						&& contentScoreCacheObject.get(VERICITE_CACHE_PLACEHOLDER).containsKey(VERICITE_CACHE_PLACEHOLDER)){
+					Object[] cacheItem = contentScoreCacheObject.get(VERICITE_CACHE_PLACEHOLDER).get(VERICITE_CACHE_PLACEHOLDER);
+					Calendar cal = Calendar.getInstance();
+					cal.setTime(new Date());
+					//only check vericite every 2 mins to prevent subsequent calls from the same thread
+					cal.add(Calendar.MINUTE, VERICITE_SERVICE_CALL_THROTTLE_MINS * -1);
+					if(((Date) cacheItem[1]).after(cal.getTime())){
+						//we just checked VC, skip asking again
+						skip = true;
+					}
+				}
+			}
+			//look up score in VC 
+			if(context != null && !skip){
 				DefaultApi vericiteApi = getVeriCiteAPI();
 				String externalContentID = null;			
 				if(assignmentRef == null){
@@ -409,19 +463,33 @@ public class ContentReviewServiceImpl implements ContentReviewService {
 						}
 						//only cache the score if it is > 0
 						if(scoreResponse.getScore() != null && scoreResponse.getScore().intValue() >= 0){
-							Map<String, Map<String, Object[]>> userCacheMap = contentScoreCache.get(scoreResponse.getAssignment());
+							Object userCacheMap = contentScoreCache.get(scoreResponse.getAssignment());
 							if(userCacheMap == null){
 								userCacheMap = new HashMap<String, Map<String, Object[]>>();
 							}
-							Map<String, Object[]> cacheMap = userCacheMap.get(scoreResponse.getUser());
+							Map<String, Object[]> cacheMap = ((Map<String, Map<String, Object[]>>) userCacheMap).get(scoreResponse.getUser());
 							if(cacheMap == null){
 								cacheMap = new HashMap<String, Object[]>();
 							}
 							cacheMap.put(scoreResponse.getExternalContentId(), new Object[]{scoreResponse.getScore(), new Date()});
-							userCacheMap.put(scoreResponse.getUser(), cacheMap);								
+							((Map<String, Map<String, Object[]>>) userCacheMap).put(scoreResponse.getUser(), cacheMap);								
 							contentScoreCache.put(scoreResponse.getAssignment(), userCacheMap);
 						}
 					}
+				}
+				//keep track of last call to make sure we don't call VC too much
+				if(StringUtils.isNotEmpty(assignment)){
+					Object userCacheMap = contentScoreCache.get(assignment);
+					if(userCacheMap == null){
+						userCacheMap = new HashMap<String, Map<String, Object[]>>();
+					}
+					Map<String, Object[]> cacheMap = ((Map<String, Map<String, Object[]>>) userCacheMap).get(VERICITE_CACHE_PLACEHOLDER);
+					if(cacheMap == null){
+						cacheMap = new HashMap<String, Object[]>();
+					}
+					cacheMap.put(VERICITE_CACHE_PLACEHOLDER, new Object[]{0, new Date()});
+					((Map<String, Map<String, Object[]>>) userCacheMap).put(VERICITE_CACHE_PLACEHOLDER, cacheMap);								
+					contentScoreCache.put(assignment, userCacheMap);
 				}
 				if(score == null){
 					//nothing was found, throw exception for this contentId
@@ -432,9 +500,9 @@ public class ContentReviewServiceImpl implements ContentReviewService {
 						return score;
 					}else{
 						//grab the score from the map if it exists, if not, then there could have been an error:
-						if(contentScoreCache.containsKey(assignment) && contentScoreCache.get(assignment).containsKey(userId)
-								&& contentScoreCache.get(assignment).get(userId).containsKey(contentId)){
-							return (Integer) contentScoreCache.get(assignment).get(userId).get(contentId)[0];
+						if(contentScoreCache.containsKey(assignment) && ((Map<String, Map<String, Object[]>>) contentScoreCache.get(assignment)).containsKey(userId)
+								&& ((Map<String, Map<String, Object[]>>) contentScoreCache.get(assignment)).get(userId).containsKey(contentId)){
+							return (Integer) ((Map<String, Map<String, Object[]>>) contentScoreCache.get(assignment)).get(userId).get(contentId)[0];
 						}else{
 							throw new QueueException("No report was found for contentId: " + contentId);		
 						}
@@ -597,7 +665,7 @@ public class ContentReviewServiceImpl implements ContentReviewService {
 	
 	private String getAssignmentTitle(String assignmentRef){
 		if(assignmentTitleCache.containsKey(assignmentRef)){
-			return assignmentTitleCache.get(assignmentRef);
+			return (String) assignmentTitleCache.get(assignmentRef);
 		}else{
 			String assignmentTitle = null;
 			if (assignmentRef.startsWith("/assignment/")) {
@@ -746,6 +814,14 @@ public class ContentReviewServiceImpl implements ContentReviewService {
 
 	public void setSiteService(SiteService siteService) {
 		this.siteService = siteService;
+	}
+
+	public MemoryService getMemoryService() {
+		return memoryService;
+	}
+
+	public void setMemoryService(MemoryService memoryService) {
+		this.memoryService = memoryService;
 	}
 	
 }
