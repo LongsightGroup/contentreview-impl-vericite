@@ -507,7 +507,7 @@ public class ContentReviewServiceImpl implements ContentReviewService {
 				}
 				if(score == null){
 					//nothing was found, throw exception for this contentId
-					throw new QueueException("No report was found for contentId: " + contentId);
+					throw new QueueException("No report was found for contentId: " + externalContentId);
 				}else{
 					if(assignmentRef == null){
 						//score wasn't null and there should have only been one score, so just return that value
@@ -515,10 +515,10 @@ public class ContentReviewServiceImpl implements ContentReviewService {
 					}else{
 						//grab the score from the map if it exists, if not, then there could have been an error:
 						if(contentScoreCache.containsKey(assignment) && ((Map<String, Map<String, Object[]>>) contentScoreCache.get(assignment)).containsKey(userId)
-								&& ((Map<String, Map<String, Object[]>>) contentScoreCache.get(assignment)).get(userId).containsKey(contentId)){
-							return (Integer) ((Map<String, Map<String, Object[]>>) contentScoreCache.get(assignment)).get(userId).get(contentId)[0];
+								&& ((Map<String, Map<String, Object[]>>) contentScoreCache.get(assignment)).get(userId).containsKey(externalContentId)){
+							return (Integer) ((Map<String, Map<String, Object[]>>) contentScoreCache.get(assignment)).get(userId).get(externalContentId)[0];
 						}else{
-							throw new QueueException("No report was found for contentId: " + contentId);		
+							throw new QueueException("No report was found for contentId: " + externalContentId);		
 						}
 					}
 				}
@@ -624,7 +624,7 @@ public class ContentReviewServiceImpl implements ContentReviewService {
 							if(fileSubmissions != null){
 								for(FileSubmission f : fileSubmissions){						
 									ExternalContentData externalContentData = new ExternalContentData();
-									externalContentData.setExternalContentID(f.contentId);
+									externalContentData.setExternalContentID(getAttachmentId(f.contentId));
 									externalContentData.setFileName(FilenameUtils.getBaseName(f.fileName));
 									externalContentData.setUploadContentType(FilenameUtils.getExtension(f.fileName));
 									externalContentData.setUploadContentLength((int) f.contentLength);
@@ -645,7 +645,7 @@ public class ContentReviewServiceImpl implements ContentReviewService {
 								for(ExternalContentUploadInfo info : uploadInfo){
 									if(fileSubmissions != null){
 										for(FileSubmission f : fileSubmissions){
-											if(f.contentId.equals(info.getExternalContentId())){
+											if(getAttachmentId(f.contentId).equals(info.getExternalContentId())){
 												uploadExternalContent(info.getUrlPost(), f.data);
 												break;
 											}
@@ -775,6 +775,10 @@ public class ContentReviewServiceImpl implements ContentReviewService {
 	
 	private String getAssignmentAttachmentId(String consumer, String contextId, String assignmentId, String attachmentId){
 		return "/" + consumer + "/" + contextId + "/" + assignmentId + "/" + attachmentId;
+	}
+	
+	private String getAttachmentId(String resourceid){
+		return "/" + consumer + resourceid;
 	}
 	
 	private void uploadExternalContent(String urlString, byte[] data){
