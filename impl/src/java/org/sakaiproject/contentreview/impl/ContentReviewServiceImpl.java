@@ -524,7 +524,7 @@ public class ContentReviewServiceImpl implements ContentReviewService {
 				}
 			}else{
 				//content id is bad
-				throw new ReportException("Couldn't find report score for contentId: " + contentId);
+				throw new QueueException("Couldn't find report score for contentId: " + contentId);
 			}
 		}else{
 			return score;
